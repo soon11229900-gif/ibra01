@@ -1,0 +1,117 @@
+name: Build APK
+on:
+  push:
+  workflow_dispatch:
+permissions:
+  contents: write
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: 17
+      - uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: 8.7
+      - name: Create Android project around main.cpp
+        run: |
+          mkdir -p .
+          cat > settings.gradle <<'EOF'
+          pluginManagement {
+              repositories { google(); mavenCentral(); gradlePluginPortal() }
+          }
+          dependencyResolutionManagement {
+              repositoriesMode.set(RepositoriesMode.FAIL_ON_PROJECT_REPOS)
+              repositories { google(); mavenCentral() }
+          }
+          rootProject.name = "Warzone3D"
+          include ':app'
+          EOF
+          mkdir -p .
+          cat > build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application' version '8.5.2' apply false
+          }
+          EOF
+          mkdir -p .
+          cat > gradle.properties <<'EOF'
+          org.gradle.jvmargs=-Xmx2048m -Dfile.encoding=UTF-8
+          android.useAndroidX=false
+          EOF
+          mkdir -p app
+          cat > app/build.gradle <<'EOF'
+          plugins {
+              id 'com.android.application'
+          }
+          android {
+              namespace 'com.example.warzone'
+              compileSdk 34
+              defaultConfig {
+                  applicationId "com.example.warzone"
+                  minSdk 24
+                  targetSdk 34
+                  versionCode 1
+                  versionName "1.0"
+                  ndk { abiFilters 'arm64-v8a', 'armeabi-v7a' }
+                  externalNativeBuild { cmake { arguments '-DANDROID_STL=c++_static' } }
+              }
+              externalNativeBuild {
+                  cmake { path file('src/main/cpp/CMakeLists.txt') }
+              }
+              buildTypes {
+                  release { minifyEnabled false }
+              }
+          }
+          EOF
+          mkdir -p app/src/main
+          cat > app/src/main/AndroidManifest.xml <<'EOF'
+          <?xml version="1.0" encoding="utf-8"?>
+          <manifest xmlns:android="http://schemas.android.com/apk/res/android">
+              <uses-feature android:glEsVersion="0x00030000" android:required="true" />
+              <application
+                  android:label="Warzone 3D"
+                  android:hasCode="false"
+                  android:allowBackup="false"
+                  android:theme="@android:style/Theme.NoTitleBar.Fullscreen">
+                  <activity
+                      android:name="android.app.NativeActivity"
+                      android:exported="true"
+                      android:screenOrientation="sensorLandscape"
+                      android:configChanges="orientation|keyboardHidden|screenSize|screenLayout|smallestScreenSize|uiMode">
+                      <meta-data android:name="android.app.lib_name" android:value="warzone" />
+                      <intent-filter>
+                          <action android:name="android.intent.action.MAIN" />
+                          <category android:name="android.intent.category.LAUNCHER" />
+                      </intent-filter>
+                  </activity>
+              </application>
+          </manifest>
+          EOF
+          mkdir -p app/src/main/cpp
+          cat > app/src/main/cpp/CMakeLists.txt <<'EOF'
+          cmake_minimum_required(VERSION 3.18)
+          project(warzone)
+          set(CMAKE_CXX_STANDARD 17)
+
+          add_library(native_app_glue STATIC
+              ${ANDROID_NDK}/sources/android/native_app_glue/android_native_app_glue.c)
+          target_include_directories(native_app_glue PUBLIC
+              ${ANDROID_NDK}/sources/android/native_app_glue)
+
+          add_library(warzone SHARED main.cpp)
+          set_target_properties(warzone PROPERTIES LINK_FLAGS "-u ANativeActivity_onCreate")
+          target_link_libraries(warzone native_app_glue android log EGL GLESv3)
+          EOF
+          mkdir -p app/src/main/cpp
+          cp main.cpp app/src/main/cpp/main.cpp
+      - name: Build debug APK
+        run: gradle assembleDebug --no-daemon
+      - name: Publish APK as a release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: build-${{ github.run_number }}
+          name: Warzone 3D build ${{ github.run_number }}
+          files: app/build/outputs/apk/debug/app-debug.apk
